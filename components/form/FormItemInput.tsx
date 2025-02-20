@@ -1,30 +1,31 @@
 import * as React from 'react';
+import type { JSX } from 'react';
 import classNames from 'classnames';
-import LoadingOutlined from '@ant-design/icons/LoadingOutlined';
-import CloseCircleFilled from '@ant-design/icons/CloseCircleFilled';
-import CheckCircleFilled from '@ant-design/icons/CheckCircleFilled';
-import ExclamationCircleFilled from '@ant-design/icons/ExclamationCircleFilled';
+import { get, set } from 'rc-util';
+import useLayoutEffect from 'rc-util/lib/hooks/useLayoutEffect';
 
-import Col, { ColProps } from '../grid/col';
-import { ValidateStatus } from './FormItem';
+import type { ColProps } from '../grid/col';
+import Col from '../grid/col';
 import { FormContext, FormItemPrefixContext } from './context';
 import ErrorList from './ErrorList';
+import type { ValidateStatus } from './FormItem';
+import FallbackCmp from './style/fallbackCmp';
 
 interface FormItemInputMiscProps {
   prefixCls: string;
   children: React.ReactNode;
   errors: React.ReactNode[];
   warnings: React.ReactNode[];
-  hasFeedback?: boolean;
-  validateStatus?: ValidateStatus;
-  /** @private Internal Usage, do not use in any of your production. */
+  marginBottom?: number | null;
+  onErrorVisibleChanged?: (visible: boolean) => void;
+  /** @internal do not use in any of your production. */
   _internalItemRender?: {
     mark: string;
     render: (
       props: FormItemInputProps & FormItemInputMiscProps,
       domList: {
         input: JSX.Element;
-        errorList: JSX.Element;
+        errorList: JSX.Element | null;
         extra: JSX.Element | null;
       },
     ) => React.ReactNode;
@@ -32,85 +33,130 @@ interface FormItemInputMiscProps {
 }
 
 export interface FormItemInputProps {
+  labelCol?: ColProps;
   wrapperCol?: ColProps;
   extra?: React.ReactNode;
   status?: ValidateStatus;
   help?: React.ReactNode;
+  fieldId?: string;
+  label?: React.ReactNode;
 }
+const GRID_MAX = 24;
 
-const iconMap: { [key: string]: any } = {
-  success: CheckCircleFilled,
-  warning: ExclamationCircleFilled,
-  error: CloseCircleFilled,
-  validating: LoadingOutlined,
-};
-
-const FormItemInput: React.FC<FormItemInputProps & FormItemInputMiscProps> = props => {
+const FormItemInput: React.FC<FormItemInputProps & FormItemInputMiscProps> = (props) => {
   const {
     prefixCls,
     status,
+    labelCol,
     wrapperCol,
     children,
     errors,
     warnings,
-    hasFeedback,
     _internalItemRender: formItemRender,
-    validateStatus,
     extra,
     help,
+    fieldId,
+    marginBottom,
+    onErrorVisibleChanged,
+    label,
   } = props;
   const baseClassName = `${prefixCls}-item`;
 
   const formContext = React.useContext(FormContext);
 
-  const mergedWrapperCol: ColProps = wrapperCol || formContext.wrapperCol || {};
+  const mergedWrapperCol = React.useMemo(() => {
+    let mergedWrapper: ColProps = { ...(wrapperCol || formContext.wrapperCol || {}) };
+    if (label === null && !labelCol && !wrapperCol && formContext.labelCol) {
+      const list = [undefined, 'xs', 'sm', 'md', 'lg', 'xl', 'xxl'] as const;
+
+      list.forEach((size) => {
+        const _size = size ? [size] : [];
+
+        const formLabel = get(formContext.labelCol, _size);
+        const formLabelObj = typeof formLabel === 'object' ? formLabel : {};
+
+        const wrapper = get(mergedWrapper, _size);
+        const wrapperObj = typeof wrapper === 'object' ? wrapper : {};
+
+        if ('span' in formLabelObj && !('offset' in wrapperObj) && formLabelObj.span < GRID_MAX) {
+          mergedWrapper = set(mergedWrapper, [..._size, 'offset'], formLabelObj.span);
+        }
+      });
+    }
+    return mergedWrapper;
+  }, [wrapperCol, formContext]);
 
   const className = classNames(`${baseClassName}-control`, mergedWrapperCol.className);
 
-  // Should provides additional icon if `hasFeedback`
-  const IconNode = validateStatus && iconMap[validateStatus];
-  const icon =
-    hasFeedback && IconNode ? (
-      <span className={`${baseClassName}-children-icon`}>
-        <IconNode />
-      </span>
-    ) : null;
-
   // Pass to sub FormItem should not with col info
-  const subFormContext = { ...formContext };
-  delete subFormContext.labelCol;
-  delete subFormContext.wrapperCol;
+  const subFormContext = React.useMemo(() => {
+    const { labelCol, wrapperCol, ...rest } = formContext;
+    return rest;
+  }, [formContext]);
 
-  const inputDom = (
+  const extraRef = React.useRef<HTMLDivElement>(null);
+  const [extraHeight, setExtraHeight] = React.useState<number>(0);
+  useLayoutEffect(() => {
+    if (extra && extraRef.current) {
+      setExtraHeight(extraRef.current.clientHeight);
+    } else {
+      setExtraHeight(0);
+    }
+  }, [extra]);
+
+  const inputDom: React.ReactNode = (
     <div className={`${baseClassName}-control-input`}>
       <div className={`${baseClassName}-control-input-content`}>{children}</div>
-      {icon}
     </div>
   );
-  const errorListDom = (
-    <FormItemPrefixContext.Provider value={{ prefixCls, status }}>
-      <ErrorList
-        errors={errors}
-        warnings={warnings}
-        help={help}
-        helpStatus={status}
-        className={`${baseClassName}-explain-connected`}
-      />
-    </FormItemPrefixContext.Provider>
-  );
+  const formItemContext = React.useMemo(() => ({ prefixCls, status }), [prefixCls, status]);
+  const errorListDom: React.ReactNode =
+    marginBottom !== null || errors.length || warnings.length ? (
+      <FormItemPrefixContext.Provider value={formItemContext}>
+        <ErrorList
+          fieldId={fieldId}
+          errors={errors}
+          warnings={warnings}
+          help={help}
+          helpStatus={status}
+          className={`${baseClassName}-explain-connected`}
+          onVisibleChanged={onErrorVisibleChanged}
+        />
+      </FormItemPrefixContext.Provider>
+    ) : null;
+
+  const extraProps: { id?: string } = {};
+
+  if (fieldId) {
+    extraProps.id = `${fieldId}_extra`;
+  }
 
   // If extra = 0, && will goes wrong
   // 0&&error -> 0
-  const extraDom = extra ? <div className={`${baseClassName}-extra`}>{extra}</div> : null;
+  const extraDom: React.ReactNode = extra ? (
+    <div {...extraProps} className={`${baseClassName}-extra`} ref={extraRef}>
+      {extra}
+    </div>
+  ) : null;
 
-  const dom =
+  const additionalDom: React.ReactNode =
+    errorListDom || extraDom ? (
+      <div
+        className={`${baseClassName}-additional`}
+        style={marginBottom ? { minHeight: marginBottom + extraHeight } : {}}
+      >
+        {errorListDom}
+        {extraDom}
+      </div>
+    ) : null;
+
+  const dom: React.ReactNode =
     formItemRender && formItemRender.mark === 'pro_table_render' && formItemRender.render ? (
       formItemRender.render(props, { input: inputDom, errorList: errorListDom, extra: extraDom })
     ) : (
       <>
         {inputDom}
-        {errorListDom}
-        {extraDom}
+        {additionalDom}
       </>
     );
   return (
@@ -118,6 +164,7 @@ const FormItemInput: React.FC<FormItemInputProps & FormItemInputMiscProps> = pro
       <Col {...mergedWrapperCol} className={className}>
         {dom}
       </Col>
+      <FallbackCmp prefixCls={prefixCls} />
     </FormContext.Provider>
   );
 };

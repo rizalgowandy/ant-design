@@ -1,198 +1,173 @@
 import * as React from 'react';
-import RcTextArea, { TextAreaProps as RcTextAreaProps } from 'rc-textarea';
-import ResizableTextArea from 'rc-textarea/lib/ResizableTextArea';
-import omit from 'rc-util/lib/omit';
+import { forwardRef } from 'react';
 import classNames from 'classnames';
-import useMergedState from 'rc-util/lib/hooks/useMergedState';
-import ClearableLabeledInput from './ClearableLabeledInput';
-import { ConfigContext } from '../config-provider';
-import { fixControlledValue, resolveOnChange, triggerFocus, InputFocusOptions } from './Input';
-import SizeContext, { SizeType } from '../config-provider/SizeContext';
+import type { TextAreaProps as RcTextAreaProps, TextAreaRef as RcTextAreaRef } from 'rc-textarea';
+import RcTextArea from 'rc-textarea';
 
-interface ShowCountProps {
-  formatter: (args: { count: number; maxLength?: number }) => string;
-}
+import getAllowClear from '../_util/getAllowClear';
+import type { InputStatus } from '../_util/statusUtils';
+import { getMergedStatus, getStatusClassNames } from '../_util/statusUtils';
+import { devUseWarning } from '../_util/warning';
+import type { Variant } from '../config-provider';
+import { useComponentConfig } from '../config-provider/context';
+import DisabledContext from '../config-provider/DisabledContext';
+import useCSSVarCls from '../config-provider/hooks/useCSSVarCls';
+import useSize from '../config-provider/hooks/useSize';
+import type { SizeType } from '../config-provider/SizeContext';
+import { FormItemInputContext } from '../form/context';
+import useVariant from '../form/hooks/useVariants';
+import { useCompactItemContext } from '../space/Compact';
+import type { InputFocusOptions } from './Input';
+import { triggerFocus } from './Input';
+import { useSharedStyle } from './style';
+import useStyle from './style/textarea';
 
-function fixEmojiLength(value: string, maxLength: number) {
-  return [...(value || '')].slice(0, maxLength).join('');
-}
-
-export interface TextAreaProps extends RcTextAreaProps {
-  allowClear?: boolean;
+export interface TextAreaProps extends Omit<RcTextAreaProps, 'suffix'> {
+  /** @deprecated Use `variant` instead */
   bordered?: boolean;
-  showCount?: boolean | ShowCountProps;
   size?: SizeType;
+  status?: InputStatus;
+  rootClassName?: string;
+  /**
+   * @since 5.13.0
+   * @default "outlined"
+   */
+  variant?: Variant;
 }
 
 export interface TextAreaRef {
   focus: (options?: InputFocusOptions) => void;
   blur: () => void;
-  resizableTextArea?: ResizableTextArea;
+  resizableTextArea?: RcTextAreaRef['resizableTextArea'];
 }
 
-const TextArea = React.forwardRef<TextAreaRef, TextAreaProps>(
-  (
-    {
-      prefixCls: customizePrefixCls,
-      bordered = true,
-      showCount = false,
-      maxLength,
-      className,
-      style,
-      size: customizeSize,
-      onCompositionStart,
-      onCompositionEnd,
-      onChange,
-      ...props
+const TextArea = forwardRef<TextAreaRef, TextAreaProps>((props, ref) => {
+  const {
+    prefixCls: customizePrefixCls,
+    bordered = true,
+    size: customizeSize,
+    disabled: customDisabled,
+    status: customStatus,
+    allowClear,
+    classNames: classes,
+    rootClassName,
+    className,
+    style,
+    styles,
+    variant: customVariant,
+    ...rest
+  } = props;
+
+  if (process.env.NODE_ENV !== 'production') {
+    const { deprecated } = devUseWarning('TextArea');
+    deprecated(!('bordered' in props), 'bordered', 'variant');
+  }
+
+  const {
+    getPrefixCls,
+    direction,
+    allowClear: contextAllowClear,
+    autoComplete: contextAutoComplete,
+    className: contextClassName,
+    style: contextStyle,
+    classNames: contextClassNames,
+    styles: contextStyles,
+  } = useComponentConfig('textArea');
+
+  // ===================== Disabled =====================
+  const disabled = React.useContext(DisabledContext);
+  const mergedDisabled = customDisabled ?? disabled;
+
+  // ===================== Status =====================
+  const {
+    status: contextStatus,
+    hasFeedback,
+    feedbackIcon,
+  } = React.useContext(FormItemInputContext);
+  const mergedStatus = getMergedStatus(contextStatus, customStatus);
+
+  // ===================== Ref =====================
+  const innerRef = React.useRef<RcTextAreaRef>(null);
+
+  React.useImperativeHandle(ref, () => ({
+    resizableTextArea: innerRef.current?.resizableTextArea,
+    focus: (option?: InputFocusOptions) => {
+      triggerFocus(innerRef.current?.resizableTextArea?.textArea, option);
     },
-    ref,
-  ) => {
-    const { getPrefixCls, direction } = React.useContext(ConfigContext);
-    const size = React.useContext(SizeContext);
+    blur: () => innerRef.current?.blur(),
+  }));
 
-    const innerRef = React.useRef<RcTextArea>(null);
-    const clearableInputRef = React.useRef<ClearableLabeledInput>(null);
+  const prefixCls = getPrefixCls('input', customizePrefixCls);
 
-    const [compositing, setCompositing] = React.useState(false);
+  // ===================== Style =====================
+  const rootCls = useCSSVarCls(prefixCls);
+  const [wrapSharedCSSVar, hashId, cssVarCls] = useSharedStyle(prefixCls, rootClassName);
+  const [wrapCSSVar] = useStyle(prefixCls, rootCls);
 
-    const [value, setValue] = useMergedState(props.defaultValue, {
-      value: props.value,
-    });
+  // ===================== Compact Item =====================
+  const { compactSize, compactItemClassnames } = useCompactItemContext(prefixCls, direction);
 
-    const handleSetValue = (val: string, callback?: () => void) => {
-      if (props.value === undefined) {
-        setValue(val);
-        callback?.();
-      }
-    };
+  // ===================== Size =====================
+  const mergedSize = useSize((ctx) => customizeSize ?? compactSize ?? ctx);
 
-    // =========================== Value Update ===========================
-    // Max length value
-    const hasMaxLength = Number(maxLength) > 0;
+  const [variant, enableVariantCls] = useVariant('textArea', customVariant, bordered);
 
-    const onInternalCompositionStart: React.CompositionEventHandler<HTMLTextAreaElement> = e => {
-      setCompositing(true);
-      onCompositionStart?.(e);
-    };
+  const mergedAllowClear = getAllowClear(allowClear ?? contextAllowClear);
 
-    const onInternalCompositionEnd: React.CompositionEventHandler<HTMLTextAreaElement> = e => {
-      setCompositing(false);
-
-      let triggerValue = e.currentTarget.value;
-      if (hasMaxLength) {
-        triggerValue = fixEmojiLength(triggerValue, maxLength!);
-      }
-
-      // Patch composition onChange when value changed
-      if (triggerValue !== value) {
-        handleSetValue(triggerValue);
-        resolveOnChange(e.currentTarget, e, onChange, triggerValue);
-      }
-
-      onCompositionEnd?.(e);
-    };
-
-    const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-      let triggerValue = e.target.value;
-      if (!compositing && hasMaxLength) {
-        triggerValue = fixEmojiLength(triggerValue, maxLength!);
-      }
-
-      handleSetValue(triggerValue);
-      resolveOnChange(e.currentTarget, e, onChange, triggerValue);
-    };
-
-    // ============================== Reset ===============================
-    const handleReset = (e: React.MouseEvent<HTMLElement, MouseEvent>) => {
-      handleSetValue('', () => {
-        innerRef.current?.focus();
-      });
-      resolveOnChange(innerRef.current?.resizableTextArea?.textArea!, e, onChange);
-    };
-
-    const prefixCls = getPrefixCls('input', customizePrefixCls);
-
-    React.useImperativeHandle(ref, () => ({
-      resizableTextArea: innerRef.current?.resizableTextArea,
-      focus: (option?: InputFocusOptions) => {
-        triggerFocus(innerRef.current?.resizableTextArea?.textArea, option);
-      },
-      blur: () => innerRef.current?.blur(),
-    }));
-
-    const textArea = (
+  return wrapSharedCSSVar(
+    wrapCSSVar(
       <RcTextArea
-        {...omit(props, ['allowClear'])}
-        className={classNames({
-          [`${prefixCls}-borderless`]: !bordered,
-          [className!]: className && !showCount,
-          [`${prefixCls}-sm`]: size === 'small' || customizeSize === 'small',
-          [`${prefixCls}-lg`]: size === 'large' || customizeSize === 'large',
-        })}
-        style={showCount ? undefined : style}
-        prefixCls={prefixCls}
-        onCompositionStart={onInternalCompositionStart}
-        onChange={handleChange}
-        onCompositionEnd={onInternalCompositionEnd}
-        ref={innerRef}
-        maxLength={maxLength}
-      />
-    );
-
-    let val = fixControlledValue(value) as string;
-
-    if (!compositing && hasMaxLength && (props.value === null || props.value === undefined)) {
-      // fix #27612 将value转为数组进行截取，解决 '😂'.length === 2 等emoji表情导致的截取乱码的问题
-      val = fixEmojiLength(val, maxLength!);
-    }
-
-    // TextArea
-    const textareaNode = (
-      <ClearableLabeledInput
-        {...props}
-        prefixCls={prefixCls}
-        direction={direction}
-        inputType="text"
-        value={val}
-        element={textArea}
-        handleReset={handleReset}
-        ref={clearableInputRef}
-        bordered={bordered}
-        style={showCount ? undefined : style}
-      />
-    );
-
-    // Only show text area wrapper when needed
-    if (showCount) {
-      const valueLength = [...val].length;
-
-      let dataCount = '';
-      if (typeof showCount === 'object') {
-        dataCount = showCount.formatter({ count: valueLength, maxLength });
-      } else {
-        dataCount = `${valueLength}${hasMaxLength ? ` / ${maxLength}` : ''}`;
-      }
-
-      return (
-        <div
-          className={classNames(
-            `${prefixCls}-textarea`,
+        autoComplete={contextAutoComplete}
+        {...rest}
+        style={{ ...contextStyle, ...style }}
+        styles={{ ...contextStyles, ...styles }}
+        disabled={mergedDisabled}
+        allowClear={mergedAllowClear}
+        className={classNames(
+          cssVarCls,
+          rootCls,
+          className,
+          rootClassName,
+          compactItemClassnames,
+          contextClassName,
+        )}
+        classNames={{
+          ...classes,
+          ...contextClassNames,
+          textarea: classNames(
             {
-              [`${prefixCls}-textarea-rtl`]: direction === 'rtl',
+              [`${prefixCls}-sm`]: mergedSize === 'small',
+              [`${prefixCls}-lg`]: mergedSize === 'large',
             },
-            `${prefixCls}-textarea-show-count`,
-            className,
-          )}
-          style={style}
-          data-count={dataCount}
-        >
-          {textareaNode}
-        </div>
-      );
-    }
-
-    return textareaNode;
-  },
-);
+            hashId,
+            classes?.textarea,
+            contextClassNames.textarea,
+          ),
+          variant: classNames(
+            {
+              [`${prefixCls}-${variant}`]: enableVariantCls,
+            },
+            getStatusClassNames(prefixCls, mergedStatus),
+          ),
+          affixWrapper: classNames(
+            `${prefixCls}-textarea-affix-wrapper`,
+            {
+              [`${prefixCls}-affix-wrapper-rtl`]: direction === 'rtl',
+              [`${prefixCls}-affix-wrapper-sm`]: mergedSize === 'small',
+              [`${prefixCls}-affix-wrapper-lg`]: mergedSize === 'large',
+              [`${prefixCls}-textarea-show-count`]: props.showCount || props.count?.show,
+            },
+            hashId,
+          ),
+        }}
+        prefixCls={prefixCls}
+        suffix={
+          hasFeedback && <span className={`${prefixCls}-textarea-suffix`}>{feedbackIcon}</span>
+        }
+        ref={innerRef}
+      />,
+    ),
+  );
+});
 
 export default TextArea;
